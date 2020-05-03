@@ -22,12 +22,17 @@ num_threads = 50
 for row_tuple in df.iterrows():
     q.put(row_tuple[1])
 
+def identifier(site_content, resource_type):
+	return re.compile("<a href=\"/download/" + resource_type + "/(.*?)." + resource_type + "\"").search(site_content).group(1)
+
 def scrap_and_download(row):
 	springer_book_site = rq.get(row["OpenURL"], stream=True)
 	text_of_springer_book_site = springer_book_site.text
 
+
+	# download the epub if there is the option in the Springer site
 	try:
-		epub_identifier = re.compile("<a href=\"/download/epub/(.*?).epub\"").search(text_of_springer_book_site).group(1)
+		epub_identifier = identifier(text_of_springer_book_site, "epub")
 		destination = destination_folder + row["Book Title"].strip().replace("/", " - ") + ".epub"
 		
 		if not os.path.exists(destination):
@@ -36,7 +41,34 @@ def scrap_and_download(row):
 				f.write(r_epub.content)
 				print("It creates the follow epub", destination)
 	except Exception as e:
-		print("Something failed trying to download epub file", str(e))
+		print("Something failed trying to download epub file from", row["OpenURL"], str(e))
+
+	# download the pdf if there is the option in the Springer site
+	try:
+		pdf_identifier = identifier(text_of_springer_book_site, "pdf")
+
+		keywords_list = re.compile("<span data-test=\"book-keyword\" class=\"Keyword\">(.*?) </span>").findall(text_of_springer_book_site)
+		keywords = ', '.join(keywords_list)
+
+		destination = destination_folder + row["Book Title"].strip().replace("/", " - ") + ".pdf"
+
+		if not os.path.exists(destination):
+			with open(destination, 'wb+') as f:
+				r_pdf = rq.get(base_url + "/content/pdf/" + pdf_identifier + ".pdf", stream=True)
+				f.write(r_pdf.content)
+				print("It creates the follow pdf", destination)
+
+		print("Start metadata edition")
+		trailer = PdfReader(destination)
+		trailer.Info.Title = title
+		trailer.Info.Subject = row["English Package Name"]
+		trailer.Info.Keywords = keywords
+		trailer.Info.Author = row["Author"]
+		PdfWriter(destination, trailer=trailer).write()
+		print("Start metadata edition")
+	except Exception as e:
+		print(row["OpenURL"])
+		print("Something failed trying to download pdf file", row["OpenURL"], str(e))
 
 def execute_scrap_and_download(q):
     while not q.empty():
