@@ -25,32 +25,37 @@ for row_tuple in df.iterrows():
 def identifier(site_content, resource_type):
 	return re.compile("<a href=\"/download/" + resource_type + "/(.*?)." + resource_type + "\"").search(site_content).group(1)
 
+def try_to_download(row, book_site_content, book_extension, do_on_success = None):
+	generic_identifier = row["DOI URL"].replace("http://doi.org/", "")
+
+	try:
+		identifier = identifier(book_site_content, "epub")
+	except Exception as e:
+		identifier = generic_identifier
+
+	destination = destination_folder + row["Book Title"].strip().replace("/", " - ") + "." + book_extension
+	print(destination)
+
+	if not os.path.exists(destination):
+		with open(destination, 'wb+') as f:
+			r_book = rq.get(base_url + "/content/" + book_extension + "/" + identifier + "." + book_extension, stream=True)
+			f.write(r_book.content)
+			print("It creates the follow" + book_extension, destination)
+
+		if (do_on_success):
+			do_on_success(row, book_site_content)
+
 def scrap_and_download(row):
 	springer_book_site = rq.get(row["OpenURL"], stream=True)
 	text_of_springer_book_site = springer_book_site.text
 
-	generic_identifier = row["DOI URL"].replace("http://doi.org/", "")
+	# download the epub
+	try_to_download(row, text_of_springer_book_site, "epub")
 
-	# download the epub if there is the option in the Springer site
-	try:
-		epub_identifier = identifier(text_of_springer_book_site, "epub")
-	except Exception as e:
-		epub_identifier = generic_identifier
+	# download the pdf
+	try_to_download(row, text_of_springer_book_site, "pdf", edit_metadata)
 
-	destination = destination_folder + row["Book Title"].strip().replace("/", " - ") + ".epub"
-	
-	if not os.path.exists(destination):
-		with open(destination, 'wb+') as f:
-			r_epub = rq.get(base_url + "/content/epub/" + epub_identifier + ".epub", stream=True)
-			f.write(r_epub.content)
-			print("It creates the follow epub", destination)
-
-	# download the pdf if there is the option in the Springer site
-	try:
-		pdf_identifier = identifier(text_of_springer_book_site, "pdf")
-	except Exception as e:
-		pdf_identifier = generic_identifier
-
+def edit_metadata(row, book_site_content):
 	keywords = row["Subject Classification"].replace(";", ",")
 	
 	keywords_list = re.compile("<span data-test=\"book-keyword\" class=\"Keyword\">(.*?) </span>").findall(text_of_springer_book_site)		
@@ -58,21 +63,14 @@ def scrap_and_download(row):
 		keywords = ', '.join(keywords_list)
 
 	destination = destination_folder + row["Book Title"].strip().replace("/", " - ") + ".pdf"
-
-	if not os.path.exists(destination):
-		with open(destination, 'wb+') as f:
-			r_pdf = rq.get(base_url + "/content/pdf/" + pdf_identifier + ".pdf", stream=True)
-			f.write(r_pdf.content)
-			print("It creates the follow pdf", destination)
-
-		print("Start metadata edition")
-		trailer = PdfReader(destination)
-		trailer.Info.Title = row["Book Title"]
-		trailer.Info.Subject = row["English Package Name"]
-		trailer.Info.Keywords = keywords
-		trailer.Info.Author = row["Author"]
-		PdfWriter(destination, trailer=trailer).write()
-		print("End metadata edition")
+	print("Start metadata edition")
+	trailer = PdfReader(destination)
+	trailer.Info.Title = row["Book Title"]
+	trailer.Info.Subject = row["English Package Name"]
+	trailer.Info.Keywords = keywords
+	trailer.Info.Author = row["Author"]
+	PdfWriter(destination, trailer=trailer).write()
+	print("End metadata edition")
 
 def execute_scrap_and_download(q):
     while not q.empty():
